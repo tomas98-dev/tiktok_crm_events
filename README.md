@@ -57,8 +57,15 @@ Lo esencial que ustedes definen:
   | `email`       | STRING     | phone/email/ | Correo en crudo |
   | `lead_id`     | STRING     | lead_id      | TikTok Lead ID (mejor match si existe) |
   | `external_id` | STRING     | No          | ID propio del CRM |
+  | `ttclid`      | STRING     | No          | Click id de TikTok (mejora el match en tráfico pagado) |
   | `value`       | NUMERIC    | No          | Valor de la conversión |
   | `currency`    | STRING     | No          | Moneda ISO 4217 (ej. `PEN`) |
+
+> **Identificadores ya hasheados:** si `phone`/`email` vienen **pre-hasheados**
+> con SHA-256 desde el origen (como en la tabla `SF_CAPI`), ponga
+> `identity.identifiers_already_hashed: true` en `config.yaml` para que el
+> pipeline **no los vuelva a hashear**. `external_id` siempre lo hashea el
+> pipeline; `ttclid` y `lead_id` nunca se hashean.
 
 - `control.dataset` / `control.table`: dónde se guarda el registro de envíos
   (la tabla se crea sola si no existe).

@@ -16,6 +16,10 @@ __pycache__/
 venv/
 env/
 
+# Documentación interna (no se entrega en el repo)
+GUIA_CLIENTE.md
+*.docx
+
 # Sistema / IDE
 .DS_Store
 .idea/

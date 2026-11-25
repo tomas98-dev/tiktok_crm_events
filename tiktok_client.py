@@ -71,6 +71,31 @@ def hash_external_id(external_id: str | None) -> str | None:
     return _sha256(normalized)
 
 
+# Identificadores que YA vienen hasheados en origen (SHA-256 hex de 64 chars).
+_SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
+
+
+def passthrough_hashed(value: str | None) -> str | None:
+    """Usa un identificador que ya viene hasheado en el origen.
+
+    No lo vuelve a hashear: solo normaliza a minuscula/sin espacios y valida
+    que tenga forma de SHA-256 (64 hex). Si no la tiene, lo descarta y avisa,
+    para no mandar un valor en texto plano por error.
+    """
+    if value is None:
+        return None
+    v = str(value).strip().lower()
+    if not v:
+        return None
+    if not _SHA256_HEX.match(v):
+        logger.warning(
+            "Identificador marcado como pre-hasheado pero no parece SHA-256 "
+            "(se omite): %r", value
+        )
+        return None
+    return v
+
+
 # --------------------------------------------------------------------------- #
 # event_id determinista (idempotencia)
 # --------------------------------------------------------------------------- #
@@ -108,14 +133,27 @@ def build_event_id(row: dict, event_time_unix: int) -> str:
 # --------------------------------------------------------------------------- #
 # Construccion del payload
 # --------------------------------------------------------------------------- #
-def build_event(row: dict, default_country_code: str) -> dict:
-    """Transforma una fila de BigQuery en un evento del payload de TikTok."""
+def build_event(
+    row: dict,
+    default_country_code: str,
+    prehashed_identifiers: bool = False,
+) -> dict:
+    """Transforma una fila de BigQuery en un evento del payload de TikTok.
+
+    Si prehashed_identifiers es True, se asume que phone/email YA vienen
+    hasheados (SHA-256) desde el origen y se envian tal cual, sin volver a
+    hashear. external_id siempre se hashea en el pipeline.
+    """
     event_time_unix = _to_unix_seconds(row["event_time"])
     event_id = row.get("event_id") or build_event_id(row, event_time_unix)
 
     user: dict = {}
-    phone_hashed = hash_phone(row.get("phone"), default_country_code)
-    email_hashed = hash_email(row.get("email"))
+    if prehashed_identifiers:
+        phone_hashed = passthrough_hashed(row.get("phone"))
+        email_hashed = passthrough_hashed(row.get("email"))
+    else:
+        phone_hashed = hash_phone(row.get("phone"), default_country_code)
+        email_hashed = hash_email(row.get("email"))
     ext_hashed = hash_external_id(row.get("external_id"))
     if phone_hashed:
         user["phone"] = phone_hashed
@@ -126,6 +164,9 @@ def build_event(row: dict, default_country_code: str) -> dict:
     # El Lead ID de TikTok NO se hashea (es un identificador propio de TikTok).
     if row.get("lead_id"):
         user["lead_id"] = str(row["lead_id"])
+    # El ttclid (click id de TikTok) tampoco se hashea.
+    if row.get("ttclid"):
+        user["ttclid"] = str(row["ttclid"])
 
     properties: dict = {}
     if row.get("value") is not None:
@@ -219,14 +260,16 @@ def post_events(rows: list[dict], config: dict, access_token: str) -> list[dict]
     Cada registro incluye el event_id, identidad, resultado y respuesta de la API.
     """
     tk = config["tiktok"]
-    default_cc = config.get("identity", {}).get("default_country_code", "")
+    identity = config.get("identity", {})
+    default_cc = identity.get("default_country_code", "")
+    prehashed = bool(identity.get("identifiers_already_hashed", False))
     batch_size = int(tk.get("batch_size", 1000))
 
     # Construimos los eventos (esto tambien fija row["event_id"]).
     built: list[tuple[dict, dict]] = []
     for row in rows:
         try:
-            event = build_event(row, default_cc)
+            event = build_event(row, default_cc, prehashed)
             built.append((row, event))
         except Exception as exc:  # fila mal formada: se registra y se omite
             logger.error("Fila omitida por error al construir evento: %s", exc)

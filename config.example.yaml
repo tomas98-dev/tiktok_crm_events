@@ -54,6 +54,7 @@ tiktok:
 #   email        (STRING)    correo en crudo    (opcional)
 #   lead_id      (STRING)    TikTok Lead ID     (opcional; mejor match si existe)
 #   external_id  (STRING)    ID propio del CRM  (opcional)
+#   ttclid       (STRING)    click id de TikTok (opcional; mejora match en pago)
 #   value        (NUMERIC)   valor de la conversión (opcional)
 #   currency     (STRING)    moneda ISO 4217, ej. "PEN" (opcional)
 #
@@ -63,21 +64,24 @@ tiktok:
 source:
   query: |
     SELECT
-      telefono                               AS phone,
-      correo                                 AS email,
-      tiktok_lead_id                         AS lead_id,
-      CAST(id_candidato AS STRING)           AS external_id,
-      CASE estado_candidato
-        WHEN 'Oportunidad' THEN 'Lead calificado'
-        WHEN 'Postulante'  THEN 'Matricula'
-      END                                    AS event_name,
-      fecha_cambio_estado                    AS event_time,
-      valor_matricula                        AS value,
-      'PEN'                                  AS currency
-    FROM `<<< su-proyecto-gcp >>>.<<< su_dataset >>>.<<< su_tabla_leads >>>`
-    -- 'Interrumpido' y otros estados se excluyen al no listarlos aquí:
-    WHERE estado_candidato IN ('Oportunidad', 'Postulante')
-      AND fecha_cambio_estado IS NOT NULL
+      PHONE                                   AS phone,       -- SHA-256 ya hasheado en origen
+      EMAIL                                   AS email,       -- SHA-256 ya hasheado en origen
+      LEAD_ID                                 AS external_id, -- Id de Salesforce (el pipeline lo hashea)
+      CAST(NULL AS STRING)                    AS lead_id,     -- reservado para TikTok Lead ID (no aplica)
+      -- Click id de TikTok: solo cuando la procedencia es TikTok (no se hashea).
+      CASE
+        WHEN UPPER(Lead_Procedencia_landing__c) LIKE '%TIKTOK%'
+        THEN NULLIF(TRIM(Lead_id_click__c), '')
+      END                                     AS ttclid,
+      'Postulante'                            AS event_name,  -- evento de conversión (ver diccionario)
+      -- Las fechas vienen como texto 'YYYY-MM-DD HH:MM:SS' en UTC.
+      SAFE.PARSE_TIMESTAMP('%Y-%m-%d %H:%M:%S',
+                           Opportunity_Fecha_cambio_Postulante__c) AS event_time,
+      CAST(NULL AS NUMERIC)                   AS value,       -- esta tabla no trae valor de conversión
+      CAST(NULL AS STRING)                    AS currency
+    FROM `analista-gga-dap.UCV_RECURSOS_DIGITALES.SF_CAPI`
+    WHERE Opportunity_Fecha_cambio_Postulante__c IS NOT NULL
+      AND (PHONE IS NOT NULL OR EMAIL IS NOT NULL)
 
 # -----------------------------------------------------------------------------
 # IDENTIDAD / NORMALIZACIÓN
@@ -85,7 +89,12 @@ source:
 identity:
   # Código de país por defecto para teléfonos que vengan sin prefijo
   # internacional. Perú = "51". Se antepone antes de hashear a E.164.
+  # (Solo aplica cuando los teléfonos vienen en crudo; ver flag de abajo.)
   default_country_code: "51"
+  # Si los identificadores (phone/email) YA vienen hasheados con SHA-256 desde
+  # el origen (caso SF_CAPI), poner true para que el pipeline NO los vuelva a
+  # hashear. external_id siempre se hashea en el pipeline.
+  identifiers_already_hashed: true
 
 # -----------------------------------------------------------------------------
 # TABLA DE CONTROL (idempotencia)
