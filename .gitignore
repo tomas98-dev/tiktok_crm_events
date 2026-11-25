@@ -1,0 +1,22 @@
+# Configuración con datos sensibles (copiar desde config.example.yaml)
+config.yaml
+
+# Credenciales / secretos
+*.json
+!*.example.json
+.env
+*.key
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Sistema / IDE
+.DS_Store
+.idea/
+.vscode/

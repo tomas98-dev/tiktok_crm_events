@@ -1,0 +1,97 @@
+# =============================================================================
+# Configuración del pipeline BigQuery -> TikTok CRM Events API
+# -----------------------------------------------------------------------------
+# Copie este archivo como config.yaml y complete los valores marcados con  <<< .
+# Todo lo que el cliente necesita ajustar está en este archivo: proyecto,
+# dataset, tabla de origen, mapeo de estados a eventos y la tabla de control.
+# El Access Token NO va aquí: se entrega por variable de entorno (ver README).
+# =============================================================================
+
+gcp:
+  # ID del proyecto de GCP donde vive BigQuery.
+  project_id: "<<< su-proyecto-gcp >>>"
+  # Ubicación del dataset (ej. "US", "southamerica-west1"). Debe coincidir con
+  # la región real del dataset, o las consultas fallan.
+  bq_location: "US"
+
+tiktok:
+  # Endpoint oficial de TikTok Events API v1.3. No cambiar salvo indicación.
+  api_url: "https://business-api.tiktok.com/open_api/v1.3/event/track/"
+  # CRM Event Set ID obtenido en Events Manager (esquina superior izquierda
+  # al crear el event set de tipo CRM).
+  event_set_id: "<<< EVENT_SET_ID >>>"
+  # --- Access Token: elija UNA de estas opciones ---
+  #
+  # Opción A (RECOMENDADA, Cloud Run): el token llega por la variable de entorno
+  # TIKTOK_ACCESS_TOKEN, que Cloud Run inyecta desde Secret Manager con
+  # --set-secrets. No descomente nada aquí.
+  #
+  # Opción B: que el CÓDIGO lea Secret Manager directamente. Descomente y ponga
+  # el nombre del secreto. Requiere el rol secretmanager.secretAccessor.
+  # secret_name: "tiktok-access-token"
+  # secret_project: ""        # opcional; por defecto usa gcp.project_id
+  # secret_version: "latest"
+  #
+  # Opción C (NO recomendada): token en texto plano aquí mismo.
+  # access_token: "pega-el-token-solo-si-no-usa-ninguna-de-las-anteriores"
+
+  # Cantidad de eventos por request (máximo soportado por TikTok: 1000).
+  batch_size: 1000
+  # Código de prueba opcional. Si lo completa, los eventos se marcan como de
+  # prueba y aparecen en "Test Events" de Events Manager SIN afectar datos
+  # reales. Déjelo vacío ("") en producción.
+  test_event_code: ""
+
+# -----------------------------------------------------------------------------
+# ORIGEN DE DATOS
+# -----------------------------------------------------------------------------
+# Aquí el cliente define QUÉ datos se envían. La consulta debe devolver estas
+# columnas con estos nombres exactos (alias):
+#
+#   event_name   (STRING)    nombre del evento ya mapeado para TikTok
+#   event_time   (TIMESTAMP) momento del cambio de estado / conversión
+#   phone        (STRING)    teléfono en crudo  (opcional pero recomendado)
+#   email        (STRING)    correo en crudo    (opcional)
+#   lead_id      (STRING)    TikTok Lead ID     (opcional; mejor match si existe)
+#   external_id  (STRING)    ID propio del CRM  (opcional)
+#   value        (NUMERIC)   valor de la conversión (opcional)
+#   currency     (STRING)    moneda ISO 4217, ej. "PEN" (opcional)
+#
+# Columnas que no aplican: devuélvalas como NULL o no las incluya.
+# Al menos UNO de phone / email / lead_id debe venir con dato por fila.
+# -----------------------------------------------------------------------------
+source:
+  query: |
+    SELECT
+      telefono                               AS phone,
+      correo                                 AS email,
+      tiktok_lead_id                         AS lead_id,
+      CAST(id_candidato AS STRING)           AS external_id,
+      CASE estado_candidato
+        WHEN 'Oportunidad' THEN 'Lead calificado'
+        WHEN 'Postulante'  THEN 'Matricula'
+      END                                    AS event_name,
+      fecha_cambio_estado                    AS event_time,
+      valor_matricula                        AS value,
+      'PEN'                                  AS currency
+    FROM `<<< su-proyecto-gcp >>>.<<< su_dataset >>>.<<< su_tabla_leads >>>`
+    -- 'Interrumpido' y otros estados se excluyen al no listarlos aquí:
+    WHERE estado_candidato IN ('Oportunidad', 'Postulante')
+      AND fecha_cambio_estado IS NOT NULL
+
+# -----------------------------------------------------------------------------
+# IDENTIDAD / NORMALIZACIÓN
+# -----------------------------------------------------------------------------
+identity:
+  # Código de país por defecto para teléfonos que vengan sin prefijo
+  # internacional. Perú = "51". Se antepone antes de hashear a E.164.
+  default_country_code: "51"
+
+# -----------------------------------------------------------------------------
+# TABLA DE CONTROL (idempotencia)
+# -----------------------------------------------------------------------------
+# Registra cada evento enviado para no duplicar envíos. La crea el propio
+# script si no existe. Debe estar en un dataset donde el script pueda escribir.
+control:
+  dataset: "<<< su_dataset >>>"
+  table: "tiktok_events_enviados"
